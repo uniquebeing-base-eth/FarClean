@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FarClean</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+
+  <!-- Top Bar -->
+  <header class="flex justify-between items-center bg-white p-4 shadow">
+    <h1 class="text-xl font-bold text-blue-600">FarClean</h1>
+    <button id="loginBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+      Login with Farcaster
+    </button>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-3xl mx-auto mt-6 p-4 bg-white shadow rounded-lg">
+    <h2 class="text-lg font-semibold mb-4">Clean up your followers & following</h2>
+    
+    <div class="flex space-x-4">
+      <button id="scanFollowersBtn" disabled class="bg-gray-400 text-white px-4 py-2 rounded-lg cursor-not-allowed">
+        Scan Followers
+      </button>
+      <button id="scanFollowingBtn" disabled class="bg-gray-400 text-white px-4 py-2 rounded-lg cursor-not-allowed">
+        Scan Following
+      </button>
+    </div>
+
+    <div id="results" class="mt-6 hidden">
+      <h3 class="text-md font-bold mb-2" id="resultsTitle"></h3>
+      <div id="resultsList" class="space-y-2"></div>
+    </div>
+  </main>
+
+  <script>
+    const API_KEY = "YOUR_API_KEY_HERE";   // from Neynar dashboard
+    const CLIENT_ID = "YOUR_CLIENT_ID_HERE"; // from Neynar app setup
+    let currentUser = null;
+
+    // --- Helper: check activity ---
+    async function checkUserStatus(fid) {
+      try {
+        const castResp = await fetch(
+          `https://api.neynar.com/v2/farcaster/user/casts?fid=${fid}`,
+          { headers: { "accept": "application/json", "api_key": API_KEY } }
+        );
+        const castData = await castResp.json();
+        if (!castData.casts || castData.casts.length === 0) {
+          return "Bot?";
+        }
+        let lastCast = new Date(castData.casts[0].timestamp);
+        let daysAgo = (Date.now() - lastCast) / (1000 * 60 * 60 * 24);
+        if (daysAgo > 30) return "Inactive";
+        return "Active";
+      } catch (e) {
+        return "Unknown";
+      }
+    }
+
+    // --- Helper: render results ---
+    async function renderResults(users, title) {
+      const resultsDiv = document.getElementById("results");
+      resultsDiv.classList.remove("hidden");
+      document.getElementById("resultsTitle").textContent = title;
+      const listDiv = document.getElementById("resultsList");
+      listDiv.innerHTML = "<p class='text-gray-500'>Scanning...</p>";
+
+      listDiv.innerHTML = "";
+      for (let user of users.slice(0, 10)) { // limit for demo
+        let status = await checkUserStatus(user.fid);
+        listDiv.innerHTML += `
+          <div class="p-3 border rounded flex justify-between">
+            <span>@${user.username}</span>
+            <span class="font-semibold ${status === "Active" ? "text-green-600" : "text-red-600"}">${status}</span>
+          </div>
+        `;
+      }
+    }
+
+    // --- Login with Farcaster (SIWN flow) ---
+    document.getElementById("loginBtn").addEventListener("click", async () => {
+      try {
+        const resp = await fetch("https://api.neynar.com/v2/farcaster/siwn/request", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "api_key": API_KEY
+          },
+          body: JSON.stringify({
+            client_id: CLIENT_ID,
+            redirect_uri: window.location.origin,
+            scope: "user:read follow:read"
+          })
+        });
+
+        const data = await resp.json();
+        if (!data.url) {
+          alert("Failed to start login");
+          return;
+        }
+
+        const popup = window.open(data.url, "siwnPopup", "width=500,height=600");
+
+        let timer = setInterval(async () => {
+          if (popup.closed) {
+            clearInterval(timer);
+            const sessionResp = await fetch(
+              `https://api.neynar.com/v2/farcaster/siwn/session/${data.session_id}`,
+              { headers: { "api_key": API_KEY } }
+            );
+            const sessionData = await sessionResp.json();
+            if (sessionData.user) {
+              currentUser = sessionData.user;
+              document.getElementById("loginBtn").textContent =
+                "Logged in as @" + currentUser.username;
+
+              // Enable both scan buttons
+              ["scanFollowersBtn", "scanFollowingBtn"].forEach(id => {
+                const btn = document.getElementById(id);
+                btn.disabled = false;
+                btn.classList.remove("bg-gray-400", "cursor-not-allowed");
+                btn.classList.add("bg-blue-600", "hover:bg-blue-700");
+              });
+            } else {
+              alert("Login failed.");
+            }
+          }
+        }, 1000);
+      } catch (e) {
+        console.error(e);
+        alert("Error logging in with Farcaster");
+      }
+    });
+
+    // --- Scan Followers ---
+    document.getElementById("scanFollowersBtn").addEventListener("click", async () => {
+      if (!currentUser) return alert("Please login first");
+      const resp = await fetch(
+        `https://api.neynar.com/v2/farcaster/user/followers?fid=${currentUser.fid}`,
+        { headers: { "accept": "application/json", "api_key": API_KEY } }
+      );
+      const data = await resp.json();
+      if (!data.users) return alert("Failed to load followers");
+      await renderResults(data.users, "Followers Scan Results");
+    });
+
+    // --- Scan Following ---
+    document.getElementById("scanFollowingBtn").addEventListener("click", async () => {
+      if (!currentUser) return alert("Please login first");
+      const resp = await fetch(
+        `https://api.neynar.com/v2/farcaster/user/following?fid=${currentUser.fid}`,
+        { headers: { "accept": "application/json", "api_key": API_KEY } }
+      );
+      const data = await resp.json();
+      if (!data.users) return alert("Failed to load following");
+      await renderResults(data.users, "Following Scan Results");
+    });
+  </script>
+</body>
+</html>
